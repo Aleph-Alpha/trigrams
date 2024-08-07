@@ -1,0 +1,8 @@
+# Ignore tests tmp folder
+.mypy_cache
+.pytest_cache
+tmp/*
+.git
+tests/
+*experiments*
+*tools*

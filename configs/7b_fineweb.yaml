@@ -1,0 +1,139 @@
+{
+  "logger": {
+      "log_level": "info",
+      "log_dir": None,
+      "use_wandb": False,
+  },
+  "architecture": {
+    "mlp_type": "swiglu",
+    "init":"pythia",
+    "bias_terms": False,
+    "norm":"rms",
+    "use_flash": True,
+    "embedding_aggregation": "sum",
+    "embedding_normalization": False,
+      "vocab_size": 32000,
+      "hidden_size": 4096,
+      "num_layers": 32,
+      "num_attention_heads": 32,
+      "rotary_embedding_base": 10000,
+      "sequence_length": 4096,
+      "mlp_factor": 2.66796875,
+      "precision": "bfloat16",
+      "init_std_global_gain": 1.,
+  },
+  "data": {
+      "seed": 42,
+     "prefix_paths": [
+            "<some path to eg /fineweb/CC-MAIN-2019-04>",
+        ],
+      "prefix_path_tokenizer_file": "",
+      "sequence_length": 4096,
+  },
+  "tokenizer": {
+    "sequence_length": 4096,
+      "lowercase": False,
+      "initialize": "hash",
+      "entire_words": False,
+      "vocab_size": 32000,
+      "vocab_population": 10,
+      "vocab_population_partial_lowercase": 2, #num of vocab_population taken in lowercase
+      "do_classic_tokenization": False, #! setting true overwrites above and uses prefix_path_tokenizer from data to do on-demand tokenization
+      "seed": 42,
+      "end_of_text": "<|endoftext|>",
+      "cache_dir": null 
+  },
+  "training": {
+    "reset_attention_mask": True,
+      "iterations": 375_010, 
+      "micro_batch_size": 1, 
+      "gradient_accumulation_steps": 4, 
+      "save_interval": 5000,
+      "weight_decay": 0.1,
+      "loss_pos_weight": 300.0,
+      "loss_scale": 100.0,
+      "dataloader_num_workers": 4, 
+      "dataloader_pin_memory": True,
+      "seed": 42,
+      "profile": False,
+  },
+  "optimizer":     {
+        # AdamWOptimizerConfig
+        # Base config class providing general settings for non-mutability and json serialization options
+
+        # First coefficient used for computing running averages of gradient and its square
+        "beta1": 0.9,
+
+        # Second coefficient used for computing running averages of gradient and its square
+        "beta2": 0.95,
+
+        # term added to the denominator to improve numerical stability (default: 1e-8)
+        "eps": 1.0e-8,
+
+        # clip global l2 grads to this value, deactivate if 0.0
+        # "gradient_clipping": 1.0,
+        "gradient_clipping": 0.0,
+
+        # number of floating points to allreduce in one go
+        "allreduce_bucket_size": 500000000,
+
+        # Configuration of the loss scaler
+        "loss_scaler":         {
+            # LossScalerConfig
+            # Loss scaling is designed to combat the problem of underflowing gradients encountered at long
+            # times when training fp16 networks.  Dynamic loss scaling begins by attempting a very high loss
+            # scale.  Ironically, this may result in OVERflowing gradients.
+
+            # The optimizer then skips the update step for this particular iteration/minibatch,
+            # and the loss scaler adjusts the loss scale to a lower value.
+            # If a certain number of iterations occur without overflowing gradients detected,
+            # the loss scaler increases the loss scale once more.
+            # In this way the  loss scaler attempts to "ride the edge" of
+            # always using the highest loss scale possible without incurring overflow.
+
+            #
+            "enable": false,
+
+            # Initial loss scale
+            "initial_scale": 4294967296.0,
+
+            #
+            "window": 1000,
+
+            #
+            "hysteresis": 2,
+
+            #
+            "consecutive_hysteresis": false,
+
+            #
+            "min_scale": 1.0,
+
+            #
+            "factor": 2.0
+        }
+,
+
+        # enable zero stage 1 optimizer
+        "zero": true,
+        "zero_save_static": true
+    }
+,
+
+    #
+    "learning_rate_scheduler":     {
+        "learning_rate": 3e-4,
+
+        # Minimum learning rate below which a step's learning rate will never drop. This is the final learning rate after the schedule has been applied.
+        "learning_rate_minimum": 3e-5,
+
+        # Shape of the learning rate decay after warm up
+        "learning_rate_decay_style": "cosine",
+
+        # Number of iterations within which the learning rate follows the schedule. Warmup iterations are included.
+        "learning_rate_decay_iters": 375_100,
+
+        # Number of warmup steps during which the learning rate is linearly increased to the maximum learning rate. The actual schedule starts after the warmump steps.
+        "learning_rate_warmup_steps": 1_000
+    }
+}

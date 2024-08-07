@@ -1,0 +1,3 @@
+*.indices.bin
+*.lengths.bin
+*.offsets.bin

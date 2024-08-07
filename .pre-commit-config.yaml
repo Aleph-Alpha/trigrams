@@ -1,0 +1,41 @@
+repos:
+  - repo: https://github.com/peterdemin/pip-compile-multi
+    rev: v2.4.5
+    hooks:
+      - id: pip-compile-multi-verify
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v3.4.0
+    hooks:
+      - id: check-json
+      # - id: pretty-format-json
+      #   args:
+      #     - --autofix
+      - id: end-of-file-fixer
+        exclude: '.bin|.meta.json'
+      - id: trailing-whitespace
+        exclude: '.bin|.meta.json'
+  - repo: https://github.com/psf/black
+    rev: 23.7.0
+    hooks:
+      - id: black
+  # - repo: https://github.com/PyCQA/flake8
+  #   rev: '6.1.0'
+  #   hooks:
+  #     - id: flake8
+  #       exclude: src/license_plate_annotator/models/
+  #       args: ["--extend-ignore=E203,E501,P103,W503"]
+  #       additional_dependencies: [
+  #           'flake8-blind-except',
+  #           'flake8-docstrings',
+  #           'flake8-bugbear',
+  #           'flake8-comprehensions',
+  #           'flake8-docstrings',
+  #           'flake8-implicit-str-concat',
+  #           'flake8-fastapi',
+  #           'pydocstyle>=5.0.0',
+  #       ]
+  # - repo: https://github.com/kynan/nbstripout
+  #   rev: 0.4.0
+  #   hooks:
+  #     - id: nbstripout
+  #       files: ".ipynb"

@@ -1,0 +1,9 @@
+pytest
+black
+pre-commit
+mypy
+typing-extensions
+flake8
+httpx
+pytest-cov
+httpx

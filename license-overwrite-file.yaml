@@ -1,0 +1,3 @@
+filelock:
+ license_name: The Unlicense
+ license_file: https://raw.githubusercontent.com/tox-dev/py-filelock/main/LICENSE

@@ -1,0 +1,22 @@
+project: trigram-tokenizer
+max_restarts: 0
+environment:
+  force_pull_image: true
+  image: <your determined compatible image>
+
+checkpoint_storage:
+  save_trial_latest: 200
+resources:
+  slots_per_trial: 256
+  priority: 42
+  shm_size: 644245094400
+searcher:
+  name: single
+  metric: not_needed
+  max_length: 1
+
+name: 7B-fineweb
+entrypoint: >-
+  python3 -m determined.launch.torch_distributed python3
+  src/trigram_tokenizer/trainer/train_determined.py --config
+  configs/7b_fineweb.yaml

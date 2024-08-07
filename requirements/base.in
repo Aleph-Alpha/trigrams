@@ -1,0 +1,10 @@
+torch==2.1.2
+tqdm
+numpy
+pydantic>2.0.0
+wandb
+python-dateutil
+tokenizers
+einops
+determined==0.26.4
+jsonlines
