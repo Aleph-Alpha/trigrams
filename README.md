@@ -2,9 +2,10 @@
 
 Paper link: https://arxiv.org/abs/2406.19223
 
+
 ![Figure 1: Method comparison classical Tokenizer to T-Free](figures/fig_1.png)
 ![Table 1: Near-Duplicate and fertility metrics for several models](figures/tab_1.png)
-![Figure 3: Continued transfer learning evaluations](figures/fig_3.png)
+<img src="figures/fig_3.png" width=50%>
 
 
 ## Checkpoints
