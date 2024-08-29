@@ -9,7 +9,8 @@ Paper link: https://arxiv.org/abs/2406.19223
 
 
 ## Checkpoints
-- 7B trained on 1 epoch fineweb-edu (coming wk 35)
+- [7B trained on 1 epoch fineweb-edu](https://huggingface.co/Aleph-Alpha/tfree-beta-vocab-32k-fineweb-steps-370k)
+- [7B trained on 1 epoch fineweb-edu + continued instruct tuning](https://huggingface.co/Aleph-Alpha/tfree-beta-vocab-32k-fineweb-steps-370k-instruct-10k)
 
 
 
@@ -79,7 +80,7 @@ As such you need/ may want to
 
 ## Known Issues/ Ongoing Research
 
-N/ A
+- in trigram_tokenizer.py/decode_trigram we propose two variants to decode words. we are digging into further improvements / are happy for feedback 
 
 
 
