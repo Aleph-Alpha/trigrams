@@ -54,7 +54,10 @@ class TrigramTokenizer:
         self,
         config: TrigramTokenizerConfig,
         trigram_to_vocab: Optional[torch.Tensor] = None,
-        words_to_weights: Optional[torch.Tensor] = None,
+        words_to_weights_word_indices: Optional[torch.Tensor] = None,
+        words_to_weights_token_indices: Optional[torch.Tensor] = None,
+        words_to_weights_word_indices_edges: Optional[torch.Tensor] = None,
+        words_to_weights_token_indices_edges: Optional[torch.Tensor] = None,
         word_trigram_counts: Optional[torch.Tensor] = None,
         word_counts: Optional[torch.Tensor] = None,
         words: Optional[List[str]] = None,
@@ -148,7 +151,18 @@ class TrigramTokenizer:
                 f"end replacing lower-cased vocabs",
             )
 
-        self.words_to_weights: Optional[torch.Tensor] = words_to_weights
+        self.words_to_weights_word_indices: Optional[
+            torch.Tensor
+        ] = words_to_weights_word_indices
+        self.words_to_weights_token_indices: Optional[
+            torch.Tensor
+        ] = words_to_weights_token_indices
+        self.words_to_weights_word_indices_edges: Optional[
+            torch.Tensor
+        ] = words_to_weights_word_indices_edges
+        self.words_to_weights_token_indices_edges: Optional[
+            torch.Tensor
+        ] = words_to_weights_token_indices_edges
         self.word_trigram_counts: Optional[torch.Tensor] = word_trigram_counts
         self.word_counts: Optional[torch.Tensor] = word_counts
         self.words: List[str] = list() if words is None else words
@@ -507,13 +521,24 @@ class TrigramTokenizer:
         log_probs: Optional[int] = None,
         target_words: Optional[List[str]] = None,
         more_words: Optional[str] = None,
+        blacklist_words: Optional[List[str]] = None,
+        word_edge_weight: float = 1.0,
+        softmax: bool = True,
     ) -> DecodeResult:
         assert logits.ndim == 2, "expecting two dimensions [seq, vocab]"
         if self.config.do_classic_tokenization:
+            assert blacklist_words is None
+            assert word_edge_weight == 1.0
             return self.decode_token(logits, log_probs, target_words)
         else:
             return self.decode_trigram(
-                logits, log_probs, target_words, more_words=more_words
+                logits,
+                log_probs,
+                target_words,
+                more_words=more_words,
+                blacklist_words=blacklist_words,
+                word_edge_weight=word_edge_weight,
+                softmax=softmax,
             )
 
     def decode_token(
@@ -552,44 +577,45 @@ class TrigramTokenizer:
             words_count_training=[None for _ in argmax_words],
         )
 
-    def get_sparse_word_list_from_str(self, text: str):
-        all_words = text_to_words(text)
+    @classmethod
+    def get_sparse_word_list_from_words(
+        cls,
+        words: List[str],
+        index_base: int,
+        trigram_to_vocab: torch.Tensor,
+        config: TrigramTokenizerConfig,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        words_to_weights_word_indices = list()
+        words_to_weights_token_indices = list()
+        words_to_weights_word_indices_edges = list()
+        words_to_weights_token_indices_edges = list()
 
-        all_words = [w for w in all_words if w not in self.word_to_index]
+        word_trigram_counts = list()
 
-        results = []
-        for idx, word in enumerate(all_words):
-            results.append(
-                self.process_word(
-                    idx,
-                    word,
-                    self.config.lowercase,
-                    self.trigram_to_vocab,
-                    self.config,
-                )
+        for idx, word in enumerate(words):
+            (token_ids, token_ids_edge, trigram_count) = cls.process_word(
+                word=word,
+                trigram_to_vocab=trigram_to_vocab,
+                config=config,
             )
 
-        # convert to weights
-        indices_1 = list()
-        indices_2 = list()
-        values = list()
-        word_trigram_counts = list()
-        for word_index, word, token_ids, word_trigram_count, _ in results:
-            indices_1.extend([word_index] * len(token_ids))
-            indices_2.extend(token_ids)
-            values.extend([True] * len(token_ids))
-            word_trigram_counts.append(word_trigram_count)
+            for t_id in token_ids:
+                words_to_weights_word_indices.append(index_base + idx)
+                words_to_weights_token_indices.append(t_id)
 
-        # convert to sparse tensor
-        words_to_weights = torch.sparse_coo_tensor(
-            indices=torch.tensor([indices_1, indices_2]),
-            values=torch.tensor(values),
-            dtype=torch.bool,
-            device="cpu",
-            size=(len(all_words), self.config.vocab_size),
-        ).float()
+            for t_id in token_ids_edge:
+                words_to_weights_word_indices_edges.append(index_base + idx)
+                words_to_weights_token_indices_edges.append(t_id)
 
-        return all_words, words_to_weights, word_trigram_counts
+            word_trigram_counts.append(trigram_count)
+
+        return (
+            torch.tensor(words_to_weights_word_indices),
+            torch.tensor(words_to_weights_token_indices),
+            torch.tensor(words_to_weights_word_indices_edges),
+            torch.tensor(words_to_weights_token_indices_edges),
+            torch.tensor(word_trigram_counts),
+        )
 
     def decode_trigram(
         self,
@@ -597,55 +623,160 @@ class TrigramTokenizer:
         log_probs: Optional[int] = None,
         target_words: Optional[List[str]] = None,
         more_words: Optional[str] = None,
+        blacklist_words: Optional[List[str]] = None,
+        word_edge_weight: float = 1.0,
+        softmax: bool = True,
     ) -> DecodeResult:
         # prepare logits and scores
-        assert self.words_to_weights is not None
+        assert self.words_to_weights_word_indices is not None
 
-        logits_activated = logits.float().sigmoid().to(self.words_to_weights.device)
-        all_words = copy.deepcopy(self.words)
-        words_to_weights = self.words_to_weights
+        logits_activated = (
+            (logits.float() ).sigmoid().to(self.words_to_weights_word_indices.device)
+        )
+
+        all_words = copy.deepcopy(self.words)  # TODO no deepcopy needed
+        words_to_weights_word_indices = self.words_to_weights_word_indices
+        words_to_weights_token_indices = self.words_to_weights_token_indices
+        words_to_weights_word_indices_edges = self.words_to_weights_word_indices_edges
+        words_to_weights_token_indices_edges = self.words_to_weights_token_indices_edges
         word_trigram_counts = self.word_trigram_counts
 
         if more_words:
+            more_words_split = text_to_words(more_words)
+            more_words_split = [
+                w for w in more_words_split if w not in self.word_to_index
+            ]
+            assert self.trigram_to_vocab is not None
             (
-                more_words_split,
-                more_words_to_weights,
+                more_words_to_weights_word_indices,
+                more_words_to_weights_token_indices,
+                more_words_to_weights_word_indices_edges,
+                more_words_to_weights_token_indices_edges,
                 more_word_trigram_counts,
-            ) = self.get_sparse_word_list_from_str(more_words)
+            ) = self.get_sparse_word_list_from_words(
+                more_words_split,
+                index_base=len(self.words),
+                trigram_to_vocab=self.trigram_to_vocab,
+                config=self.config,
+            )
 
             if len(more_words_split) > 0:
+                assert words_to_weights_word_indices is not None
+                assert words_to_weights_token_indices is not None
+                assert words_to_weights_word_indices_edges is not None
+                assert words_to_weights_token_indices_edges is not None
+                assert word_trigram_counts is not None
+
                 # logger.warning(f"Added {len(more_words_split)} new words to decoding.")
                 all_words.extend(more_words_split)
-                words_to_weights = torch.vstack(
+                words_to_weights_word_indices = torch.cat(
                     [
-                        self.words_to_weights,
-                        more_words_to_weights.to(self.words_to_weights.device),
+                        words_to_weights_word_indices,
+                        more_words_to_weights_word_indices.to(
+                            words_to_weights_word_indices.device
+                        ),
                     ]
                 )
-
-                assert self.word_trigram_counts is not None
-                word_trigram_counts = torch.hstack(
+                words_to_weights_token_indices = torch.cat(
                     [
-                        self.word_trigram_counts,
-                        torch.tensor(more_word_trigram_counts).to(
-                            self.words_to_weights.device
+                        words_to_weights_token_indices,
+                        more_words_to_weights_token_indices.to(
+                            words_to_weights_token_indices.device
+                        ),
+                    ]
+                )
+                words_to_weights_word_indices_edges = torch.cat(
+                    [
+                        words_to_weights_word_indices_edges,
+                        more_words_to_weights_word_indices_edges.to(
+                            words_to_weights_word_indices_edges.device
+                        ),
+                    ]
+                )
+                words_to_weights_token_indices_edges = torch.cat(
+                    [
+                        words_to_weights_token_indices_edges,
+                        more_words_to_weights_token_indices_edges.to(
+                            words_to_weights_token_indices_edges.device
                         ),
                     ]
                 )
 
-        # Note: torch sparse kernel is expensive - this can be replaced in an allreduce fashion.
-        scores = words_to_weights @ logits_activated.transpose(1, 0)
-        scores = scores.transpose(1, 0)
+                word_trigram_counts = torch.cat(
+                    [
+                        word_trigram_counts,
+                        more_word_trigram_counts.to(word_trigram_counts.device),
+                    ]
+                )
 
-        # variant 1: only attributing positive scores
-        # scores = scores / word_trigram_counts / self.config.vocab_population
-        
-        # variant 2: also taking into account 'negative scores'
-        #  - plain sum does not work with previous sigmoid - might get improved, still.. 
+        # initialize scores
+        assert word_trigram_counts is not None
+        scores = torch.zeros(
+            (logits_activated.shape[0] * word_trigram_counts.shape[0],),
+            device=logits_activated.device,
+            dtype=logits_activated.dtype,
+        )
+
+        # add logits
+        assert words_to_weights_word_indices is not None
+        assert words_to_weights_token_indices is not None
+        if logits_activated.shape[0] > 1:
+            words_to_weights_token_indices = words_to_weights_token_indices.repeat(
+                logits_activated.shape[0]
+            )
+            words_to_weights_word_indices = torch.cat(
+                [
+                    (
+                        words_to_weights_word_indices
+                        + int(sequence_index * word_trigram_counts.shape[0])
+                    )
+                    for sequence_index in range(logits_activated.shape[0])
+                ],
+                0,
+            )
+        scores.index_add_(
+            0,
+            words_to_weights_word_indices,
+            logits_activated.flatten()[words_to_weights_token_indices],
+        )
+
+        # add logits for edges
+        assert words_to_weights_word_indices_edges is not None
+        assert words_to_weights_token_indices_edges is not None
+        if logits_activated.shape[0] > 1:
+            words_to_weights_token_indices_edges = (
+                words_to_weights_token_indices_edges.repeat(logits_activated.shape[0])
+            )
+            words_to_weights_word_indices_edges = torch.cat(
+                [
+                    (
+                        words_to_weights_word_indices_edges
+                        + int(sequence_index * word_trigram_counts.shape[0])
+                    )
+                    for sequence_index in range(logits_activated.shape[0])
+                ],
+                0,
+            )
+        scores.index_add_(
+            0,
+            words_to_weights_word_indices_edges,
+            word_edge_weight
+            * logits_activated.flatten()[words_to_weights_token_indices_edges],
+        )
+
+        # view
+        scores = (
+            scores.view(logits_activated.shape[0], -1)
+            # / word_trigram_counts
+            # / self.config.vocab_population
+        )
+
+        #sigmoid version:
         word_trigram_counts_others = self.config.vocab_size-word_trigram_counts*self.config.vocab_population
         scores = scores/(self.config.vocab_population*word_trigram_counts) + (scores-logits_activated.sum(-1).repeat(scores.shape[-1]).view((scores.shape[-1],-1)).t())/word_trigram_counts_others
 
-        scores = scores.softmax(-1) # only needed for eval
+        if softmax:
+            scores = scores.softmax(-1)
 
         # greedy sampling
         argmax_indices = scores.argmax(1).tolist()
@@ -654,6 +785,27 @@ class TrigramTokenizer:
             float(scores[sequence_index, word_index].item())
             for sequence_index, word_index in enumerate(argmax_indices)
         ]
+
+        if blacklist_words is not None:
+            assert logits.shape[0] == 1, "blacklist words not implemented for echo"
+            assert len(argmax_words) == 1, "can only have one argmax word without echo"
+
+            # resample
+            k = 1
+            blacklist_indices = set(
+                [self.word_to_index.get(w, -1) for w in blacklist_words]
+            )
+            while argmax_indices[0] in blacklist_indices:
+                k += 1
+                argmax_indices = [scores.topk(k).indices[0, -1].item()]
+
+            # update
+            if k > 1:
+                argmax_words = [all_words[word_index] for word_index in argmax_indices]
+                argmax_scores = [
+                    float(scores[sequence_index, word_index].item())
+                    for sequence_index, word_index in enumerate(argmax_indices)
+                ]
 
         # get logprobs
         log_probs_result: Optional[List[Dict[str, float]]] = None
@@ -711,7 +863,7 @@ class TrigramTokenizer:
             words=argmax_words,
             word_indices=argmax_indices,
             word_ps=argmax_scores,
-            logits=[None for _ in argmax_indices],
+            logits=logits.float(),
             log_probs=log_probs_result,
             words_count_training=[
                 self.word_counter_full.get(w, 0) for w in argmax_words
@@ -727,7 +879,10 @@ class TrigramTokenizer:
         torch.save(
             {
                 "trigram_to_vocab": self.trigram_to_vocab,
-                "words_to_weights": self.words_to_weights,
+                "words_to_weights_word_indices": self.words_to_weights_word_indices,
+                "words_to_weights_token_indices": self.words_to_weights_token_indices,
+                "words_to_weights_word_indices_edges": self.words_to_weights_word_indices_edges,
+                "words_to_weights_token_indices_edges": self.words_to_weights_token_indices_edges,
                 "word_trigram_counts": self.word_trigram_counts,
                 "word_counts": self.word_counts,
                 "words": self.words,
@@ -744,15 +899,13 @@ class TrigramTokenizer:
     @classmethod
     def process_word(
         cls,
-        word_index,
-        word,
-        lowercase,
-        trigram_to_vocab,
+        word: str,
+        trigram_to_vocab: torch.Tensor,
         config: TrigramTokenizerConfig,
     ):
         trigram_sets, words = cls.trigramify(
             text=word,
-            lowercase=lowercase,
+            lowercase=config.lowercase,
         )
         assert len(words) == 1, f"{word}, {words}"
 
@@ -763,7 +916,8 @@ class TrigramTokenizer:
             vocab_ids = cls.encode_word_to_vocab_ids(config, word=word)
             for t_id in vocab_ids.tolist():
                 token_ids.add(t_id)
-            trigram_counts = 1
+
+            trigram_count = 1
         else:
             assert len(trigram_sets) == 1
             for trigram in trigram_sets[0]:
@@ -772,13 +926,40 @@ class TrigramTokenizer:
 
                 # for now we are just using a set, compare loss_fn
                 for t_id in vocab_ids.tolist():
-                    token_ids.add(t_id)
                     if trigram.startswith(b" ") or trigram.endswith(b" "):
                         token_ids_edge.add(t_id)
+                    else:
+                        token_ids.add(t_id)
 
-            trigram_counts = len(trigram_sets[0])
+            trigram_count = len(trigram_sets[0])
 
-        return word_index, word, token_ids, trigram_counts, token_ids_edge
+        return token_ids, token_ids_edge, trigram_count
+
+    def to(self, device):
+        if self.words_to_weights_word_indices is not None:
+            self.words_to_weights_word_indices = self.words_to_weights_word_indices.to(
+                device
+            )
+
+        if self.words_to_weights_token_indices is not None:
+            self.words_to_weights_token_indices = (
+                self.words_to_weights_token_indices.to(device)
+            )
+
+        if self.words_to_weights_word_indices_edges is not None:
+            self.words_to_weights_word_indices_edges = (
+                self.words_to_weights_word_indices_edges.to(device)
+            )
+
+        if self.words_to_weights_token_indices_edges is not None:
+            self.words_to_weights_token_indices_edges = (
+                self.words_to_weights_token_indices_edges.to(device)
+            )
+
+        if self.word_trigram_counts is not None:
+            self.word_trigram_counts = self.word_trigram_counts.to(device)
+
+        return self
 
     @classmethod
     def load(
@@ -855,45 +1036,35 @@ class TrigramTokenizer:
             for word_index, (word, _) in enumerate(word_counts_combined_list):
                 all_words.append((word_index, word))
 
-            results = []
-            for idx, word in tqdm(all_words):
-                # print(idx, word)
-                results.append(
-                    cls.process_word(
-                        idx,
-                        word,
-                        config.lowercase,
-                        tokenizer_dict["trigram_to_vocab"],
-                        config,
-                    )
-                )
-
             # convert to weights
-            indices_1 = list()
-            indices_2 = list()
-            values = list()
-            word_trigram_counts = list()
-            for word_index, word, token_ids, word_trigram_count, _ in results:
-                # print(word_index, word, token_ids, word_trigram_count)
-                indices_1.extend([word_index] * len(token_ids))
-                indices_2.extend(token_ids)
-                values.extend([True] * len(token_ids))
-                word_trigram_counts.append(word_trigram_count)
-
+            (
+                words_to_weights_word_indices,
+                words_to_weights_token_indices,
+                words_to_weights_word_indices_edges,
+                words_to_weights_token_indices_edges,
+                word_trigram_counts,
+            ) = cls.get_sparse_word_list_from_words(
+                [i[1] for i in all_words],
+                index_base=0,
+                trigram_to_vocab=tokenizer_dict["trigram_to_vocab"],
+                config=config,
+            )
             logger.info("END converting words to weights")
 
-            # convert to sparse tensor
-            words_to_weights = torch.sparse_coo_tensor(
-                indices=torch.tensor([indices_1, indices_2]),
-                values=torch.tensor(values),
-                dtype=torch.bool,
-                device="cpu",
-                size=(len(word_counts_combined_list), config.vocab_size),
-            )
-
             # store in state_dict
-            tokenizer_dict["words_to_weights"] = words_to_weights
-            tokenizer_dict["word_trigram_counts"] = torch.tensor(word_trigram_counts)
+            tokenizer_dict[
+                "words_to_weights_word_indices"
+            ] = words_to_weights_word_indices
+            tokenizer_dict[
+                "words_to_weights_token_indices"
+            ] = words_to_weights_token_indices
+            tokenizer_dict[
+                "words_to_weights_word_indices_edges"
+            ] = words_to_weights_word_indices_edges
+            tokenizer_dict[
+                "words_to_weights_token_indices_edges"
+            ] = words_to_weights_token_indices_edges
+            tokenizer_dict["word_trigram_counts"] = word_trigram_counts
             tokenizer_dict["word_counts"] = torch.tensor(
                 [c for (w, c) in word_counts_combined_list]
             )
@@ -902,24 +1073,36 @@ class TrigramTokenizer:
                 word: count for word, count in word_counts_combined_list
             }
 
+        # TODO legacy
+        if "words_to_weights" in tokenizer_dict:
+            del tokenizer_dict["words_to_weights"]
+
         if reduce_tokenizer_words_to is not None:
             logger.info(
                 f"reduce_tokenizer_words_to {reduce_tokenizer_words_to} from {len(tokenizer_dict['word_trigram_counts'])}"
             )
-            tokenizer_dict["words_to_weights"] = tokenizer_dict[
-                "words_to_weights"
-            ].coalesce()
-            indices = tokenizer_dict["words_to_weights"].indices()
-            values = tokenizer_dict["words_to_weights"].values()
-            values = values[indices[0] < reduce_tokenizer_words_to]
-            indices = indices[:, indices[0] < reduce_tokenizer_words_to]
-            tokenizer_dict["words_to_weights"] = torch.sparse_coo_tensor(
-                indices=indices,
-                values=values,
-                dtype=torch.bool,
-                device="cpu",
-                size=(reduce_tokenizer_words_to, config.vocab_size),
+            mask = (
+                tokenizer_dict["words_to_weights_word_indices"]
+                < reduce_tokenizer_words_to
             )
+            tokenizer_dict["words_to_weights_word_indices"] = tokenizer_dict[
+                "words_to_weights_word_indices"
+            ][mask]
+            tokenizer_dict["words_to_weights_token_indices"] = tokenizer_dict[
+                "words_to_weights_token_indices"
+            ][mask]
+
+            mask = (
+                tokenizer_dict["words_to_weights_word_indices_edges"]
+                < reduce_tokenizer_words_to
+            )
+            tokenizer_dict["words_to_weights_word_indices_edges"] = tokenizer_dict[
+                "words_to_weights_word_indices_edges"
+            ][mask]
+            tokenizer_dict["words_to_weights_token_indices_edges"] = tokenizer_dict[
+                "words_to_weights_token_indices_edges"
+            ][mask]
+
             tokenizer_dict["word_trigram_counts"] = tokenizer_dict[
                 "word_trigram_counts"
             ][:reduce_tokenizer_words_to]
@@ -930,72 +1113,7 @@ class TrigramTokenizer:
                 :reduce_tokenizer_words_to
             ]
 
-        if (
-            "words_to_weights" in tokenizer_dict
-            and tokenizer_dict["words_to_weights"] is not None
-        ):
-            tokenizer_dict["words_to_weights"] = (
-                tokenizer_dict["words_to_weights"].to("cuda").float()
-            )
-            tokenizer_dict["word_trigram_counts"] = tokenizer_dict[
-                "word_trigram_counts"
-            ].to(tokenizer_dict["words_to_weights"].device)
-
         return cls(config=config, **tokenizer_dict)
-
-    def convert_weight_for_word_edge_overweight(self, word_edge_weight: float):
-        processed_words = []
-        for idx, word in enumerate(
-            tqdm(self.words, "convert_weight_for_word_edge_overweight")
-        ):
-            processed_words.append(
-                self.process_word(
-                    idx,
-                    word,
-                    self.config.lowercase,
-                    self.trigram_to_vocab,
-                    self.config,
-                )
-            )
-
-        # convert to weights
-        indices_1 = list()
-        indices_2 = list()
-        values = list()
-        for (
-            word_index,
-            word,
-            token_ids,
-            word_trigram_count,
-            token_ids_edge,
-        ) in processed_words:
-            # print(word_index, word, token_ids, word_trigram_count)
-            indices_1.extend([word_index] * len(token_ids))
-            token_ids_added = list()
-            token_values_added = list()
-
-            for t_id in token_ids:
-                token_ids_added.append(t_id)
-                token_values_added.append(
-                    (word_edge_weight if t_id in token_ids_edge else 1)
-                )
-
-            indices_2.extend(token_ids_added)
-            values.extend(token_values_added)
-
-        logger.info("END converting words to weights")
-
-        # convert to sparse tensor
-        words_to_weights = torch.sparse_coo_tensor(
-            indices=torch.tensor([indices_1, indices_2]),
-            values=torch.tensor(values),
-            dtype=torch.float32,
-            device="cpu",
-            size=(len(self.words), self.config.vocab_size),
-        )
-
-        assert self.words_to_weights is not None
-        self.words_to_weights = words_to_weights.to(self.words_to_weights.device)
 
     @classmethod
     def init(cls, config: TrigramTokenizerConfig):
