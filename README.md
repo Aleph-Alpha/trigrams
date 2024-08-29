@@ -67,7 +67,7 @@ python3 -m determined.launch.torch_distributed python3 src/trigram_tokenizer/tra
 Minimal Example:
 ```
 # download checkpoint from huggingface
-apt-install git-lfs
+apt-get install git-lfs
 git clone https://huggingface.co/Aleph-Alpha/tfree-research-vocab-32k-fineweb-steps-370k
 
 # install this repository
