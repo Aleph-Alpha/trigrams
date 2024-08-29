@@ -64,6 +64,20 @@ python3 -m determined.launch.torch_distributed python3 src/trigram_tokenizer/tra
 
 
 ## Inference
+Minimal Example:
+```
+# download checkpoint from huggingface
+apt-install git-lfs
+git clone https://huggingface.co/Aleph-Alpha/tfree-research-vocab-32k-fineweb-steps-370k
+
+# install this repository
+pip install -e .
+
+# adjust checkpoint path in inference.py, then run it
+python inference.py
+```
+
+
 Run one of the prepared inference* scripts.
 
 Note that the inference decode works different to that of other LLMs.
