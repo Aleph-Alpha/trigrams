@@ -27,8 +27,8 @@ def generate(
 if __name__ == "__main__":
     inference_pipe = InferencePipe(
         "<some checkpoint path>",  
-        top_word_dict="<path to some dictionary>",  # collections.Counter file with some sampling-dictionary
-        reduce_tokenizer_words_to=50000,            # will reduce above's file to top-k frequent entries
+        # top_word_dict="<path to some dictionary>",  # collections.Counter file with some sampling-dictionary
+        # reduce_tokenizer_words_to=50000,            # will reduce above's file to top-k frequent entries
     )
 
     # InferencePipe.tokenizer.convert_weight_for_word_edge_overweight(.8) # will downweight 'edge-trigram's - further discussed in paper
