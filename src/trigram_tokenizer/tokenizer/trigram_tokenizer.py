@@ -600,6 +600,7 @@ class TrigramTokenizer:
     ) -> DecodeResult:
         # prepare logits and scores
         assert self.words_to_weights is not None
+
         logits_activated = logits.float().sigmoid().to(self.words_to_weights.device)
         all_words = copy.deepcopy(self.words)
         words_to_weights = self.words_to_weights
@@ -632,12 +633,19 @@ class TrigramTokenizer:
                     ]
                 )
 
+        # Note: torch sparse kernel is expensive - this can be replaced in an allreduce fashion.
         scores = words_to_weights @ logits_activated.transpose(1, 0)
         scores = scores.transpose(1, 0)
 
-        scores = scores / word_trigram_counts / self.config.vocab_population
+        # variant 1: only attributing positive scores
+        # scores = scores / word_trigram_counts / self.config.vocab_population
+        
+        # variant 2: also taking into account 'negative scores'
+        #  - plain sum does not work with previous sigmoid - might get improved, still.. 
+        word_trigram_counts_others = self.config.vocab_size-word_trigram_counts*self.config.vocab_population
+        scores = scores/(self.config.vocab_population*word_trigram_counts) + (scores-logits_activated.sum(-1).repeat(scores.shape[-1]).view((scores.shape[-1],-1)).t())/word_trigram_counts_others
 
-        scores = scores.softmax(-1)
+        scores = scores.softmax(-1) # only needed for eval
 
         # greedy sampling
         argmax_indices = scores.argmax(1).tolist()
