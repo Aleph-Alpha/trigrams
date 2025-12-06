@@ -1,4 +1,4 @@
-torch==2.1.2
+torch==2.8.0
 tqdm
 numpy
 pydantic>2.0.0
